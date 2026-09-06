@@ -238,7 +238,7 @@ function recordGoldSnapshot(){
   S.goldHistory.push(snap);
 }
 const CHART_COLORS = ['#b98a2e','#8c3a2b','#3f5c46','#6b8ca8','#a86b8c','#8ca86b'];
-function buildGoldChartSVG(){
+function buildLiveGoldChartSVG(){
   const W = 760, H = 320, padL = 46, padR = 16, padT = 16, padB = 40;
   const hist = S.goldHistory;
   const maxTurn = Math.max(1, ...hist.map(h=>h.turn));
@@ -287,7 +287,7 @@ function buildGoldChartSVG(){
   return svg;
 }
 function downloadGoldChartPNG(){
-  const svgStr = buildGoldChartSVG();
+  const svgStr = buildLiveGoldChartSVG();
   const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
   const url = URL.createObjectURL(svgBlob);
   const img = new Image();
@@ -343,6 +343,13 @@ function clearLog(){
   try { localStorage.removeItem('hasthar_game_log'); } catch(e){}
   render();
 }
+function meanSD(arr){
+  const n = arr.length;
+  if(n===0) return { mean:0, sd:0 };
+  const mean = arr.reduce((a,b)=>a+b,0)/n;
+  const variance = n>1 ? arr.reduce((a,b)=>a+(b-mean)**2,0)/(n-1) : 0;
+  return { mean, sd:Math.sqrt(variance) };
+}
 function buildGoldChartSVG(){
   const w = 760, h = 320, padL = 55, padR = 20, padT = 20, padB = 44;
   const points = gameLog.map(e => ({x: e.turns, y: e.winnerGold}));
@@ -350,6 +357,8 @@ function buildGoldChartSVG(){
   const maxY = Math.max(1, ...points.map(p=>p.y), 1);
   const xScale = x => padL + (x/maxX) * (w-padL-padR);
   const yScale = y => (h-padB) - (y/maxY) * (h-padT-padB);
+  const xStats = meanSD(points.map(p=>p.x));
+  const yStats = meanSD(points.map(p=>p.y));
 
   let svg = `<svg id="goldChartSvg" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" style="width:100%; max-width:${w}px; background:#1d1712;">`;
   svg += `<rect x="0" y="0" width="${w}" height="${h}" fill="#1d1712"/>`;
@@ -363,6 +372,12 @@ function buildGoldChartSVG(){
     const vy = Math.round(i*maxY/4);
     svg += `<line x1="${padL}" y1="${gy}" x2="${w-padR}" y2="${gy}" stroke="#3a2f22" stroke-width="1"/>`;
     svg += `<text x="${padL-8}" y="${gy+3}" fill="#dcd0ab" font-size="9" text-anchor="end" font-family="monospace">${vy}</text>`;
+  }
+  if(points.length>0){
+    // dashed reference lines at the mean of each axis
+    const mx = xScale(xStats.mean), my = yScale(yStats.mean);
+    svg += `<line x1="${mx}" y1="${padT}" x2="${mx}" y2="${h-padB}" stroke="#8c3a2b" stroke-width="1" stroke-dasharray="4,3"/>`;
+    svg += `<line x1="${padL}" y1="${my}" x2="${w-padR}" y2="${my}" stroke="#8c3a2b" stroke-width="1" stroke-dasharray="4,3"/>`;
   }
   svg += `<text x="${w/2}" y="${h-6}" fill="#b98a2e" font-size="11" text-anchor="middle" font-family="monospace">Turns to conclude the game</text>`;
   svg += `<text x="16" y="${h/2}" fill="#b98a2e" font-size="11" text-anchor="middle" font-family="monospace" transform="rotate(-90 16 ${h/2})">Winner's Gold Coins</text>`;
@@ -424,6 +439,13 @@ function renderLog(){
 
       <div class="log-title" style="text-align:center;">TURNS vs WINNER'S GOLD COINS</div>
       <div style="display:flex; justify-content:center;">${buildGoldChartSVG()}</div>
+      <div style="text-align:center; font-family:var(--mono); font-size:.78rem; color:var(--gold-dim); margin-top:10px;">
+        ${(() => {
+          const xs = meanSD(gameLog.map(e=>e.turns));
+          const ys = meanSD(gameLog.map(e=>e.winnerGold));
+          return `Turns — mean ${xs.mean.toFixed(2)}, SD ${xs.sd.toFixed(2)} &nbsp;|&nbsp; Winner Gold — mean ${ys.mean.toFixed(2)}, SD ${ys.sd.toFixed(2)}`;
+        })()}
+      </div>
 
       <div style="text-align:center; margin-top:22px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
         <button class="big-btn" onclick="downloadLogCSV()">Download CSV</button>
@@ -486,16 +508,16 @@ function resolveHastharAttack(target, attacker){
     logMsg(`${target} holds a SACRED LINE — compulsorily used! The attack is extinguished. No Gold Coin, no Flour Doll lost.`);
     return;
   }
+  if(S.hands[target].includes('Devi')){
+    removeCard(target,'Devi'); S.discard.push('Devi');
+    const d=giveDoll(target,1), g=giveGold(target,1);
+    logMsg(`${target} reveals the GODDESS — the attack is neutralized without losing any Flour Doll! Gains +${d} Flour Doll +${g} Gold Coin.`);
+    return;
+  }
   if(S.dolls[target]>=1){
     S.dolls[target]-=1; S.supplyDolls+=1;
     const g=giveGold(attacker,1);
     logMsg(`${target} sacrifices 1 Flour Doll. ${attacker} receives ${g} Gold Coin.`);
-    return;
-  }
-  if(S.hands[target].includes('Devi')){
-    removeCard(target,'Devi'); S.discard.push('Devi');
-    const d=giveDoll(target,1), g=giveGold(target,1);
-    logMsg(`${target} has 0 Flour Dolls — reveals the GODDESS for protection! Survives with +${d} Flour Doll +${g} Gold Coin.`);
     return;
   }
   eliminate(target, attacker);
@@ -651,9 +673,10 @@ function renderRules(){
         <img src="${CARD_IMG.Hasthar}" style="width:90px; border-radius:6px;">
         <div><strong style="color:var(--gold);">Hasthar</strong> — the demon god of gold. Play it on any other
         active player you choose. Resolution order: if they hold a Sacred Line, it's compulsorily used and the
-        attack is extinguished. Otherwise, if they have 1+ Flour Dolls, they sacrifice one and you gain
-        1 Gold Coin. Otherwise, if they hold a Goddess card, they use it to survive. Otherwise, they're
-        eliminated and their Gold Coins pass to you.</div>
+        attack is extinguished. Otherwise, if they hold a Goddess card, it's compulsorily used too — the attack
+        is neutralized with no Flour Doll lost, and they still gain the Goddess's usual bonus. Otherwise, if
+        they have 1+ Flour Dolls, they sacrifice one and you gain 1 Gold Coin. Otherwise, they're eliminated
+        and their Gold Coins pass to you.</div>
       </div>
 
       <div style="display:flex; gap:14px; align-items:flex-start; margin-bottom:20px;">
@@ -666,9 +689,10 @@ function renderRules(){
       <div style="display:flex; gap:14px; align-items:flex-start; margin-bottom:20px;">
         <img src="${CARD_IMG.Devi}" style="width:90px; border-radius:6px;">
         <div><strong style="color:var(--gold);">Goddess</strong> — divine protection. Play it on your own turn
-        for +1 Flour Doll +1 Gold Coin. It also works reactively: if you're attacked by Hasthar with 0 Flour
-        Dolls and no Sacred Line, you may reveal the Goddess instead of being eliminated — you survive and
-        still gain +1 Flour Doll +1 Gold Coin.</div>
+        for +1 Flour Doll +1 Gold Coin. It also works reactively, and takes priority over sacrificing a Flour
+        Doll: if you're attacked by Hasthar while holding a Goddess (and no Sacred Line), it's used
+        automatically — you keep every Flour Doll you already had, the attack is neutralized, and you still
+        gain the usual +1 Flour Doll +1 Gold Coin.</div>
       </div>
 
       <div style="display:flex; gap:14px; align-items:flex-start; margin-bottom:20px;">
@@ -886,7 +910,7 @@ function render(){
     <div class="log" id="log">${S.log.map(l => `<div class="${l.marker?'turn-marker':''}">${l.msg}</div>`).join('')}</div>
     <div class="log-title">GOLD COINS vs TURNS</div>
     <div style="background:var(--soil-2); border:1px solid var(--line); padding:14px;">
-      ${buildGoldChartSVG()}
+      ${buildLiveGoldChartSVG()}
       <div style="text-align:center; margin-top:10px;">
         <button onclick="downloadGoldChartPNG()">Download Chart (PNG)</button>
       </div>
